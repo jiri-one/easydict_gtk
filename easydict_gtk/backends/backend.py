@@ -37,6 +37,7 @@ class DBBackend(ABC):
         """The only mandatory method that provides a database search and that must return a result iterator of Results or None."""
 
     async def search_sorted(self, word, lang, search_type: str) -> ResultList | None:
+        """On inherited backend you should call directly this coroutine or implement another method/coroutine which will call this coroutine."""
         results_from_db = self.search_in_db(word, lang, search_type)
         results = ResultList(word, lang, search_type)
         async for result in results_from_db:
