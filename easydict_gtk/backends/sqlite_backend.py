@@ -73,7 +73,7 @@ class SQLiteBackend(DBBackend):
         await self.conn.commit()
 
     async def search_async(self, word, lang, search_type: str) -> Coroutine | None:
-        """Helper coroutine to call search_sorted coroutine - in the future we can add here some logging or stats."""
+        """Helper coroutine to call search_sorted coroutine - in the future we can add here some logging or stats or something else."""
         return await self.search_sorted(word, lang, search_type)
 
     async def search_in_db(self, word, lang, search_type: str) -> AsyncIterator[Result]:
