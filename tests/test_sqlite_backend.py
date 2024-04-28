@@ -1,25 +1,13 @@
 import pytest
 import pytest_asyncio
+import lzma
 
 # internal imports
-from easydict_gtk.backends.sqlite_backend import search_async, SQLiteBackend
+from easydict_gtk.backends.sqlite_backend import SQLiteBackend
 from easydict_gtk.backends.backend import Result
 
 # type anotations
 adb: SQLiteBackend
-
-
-@pytest_asyncio.fixture
-async def adb(tmp_path):
-    file_db = tmp_path / "test.db"
-    file_db.touch()
-    async_db = SQLiteBackend(file_db)
-    await async_db.db_init(memory=False)
-    try:
-        yield async_db
-    finally:
-        await async_db.conn.close()
-
 
 @pytest.fixture
 def dummy_data():
@@ -36,6 +24,23 @@ def raw_file(tmp_path, dummy_data):
     file.write_text(dummy_data)
     return file
 
+
+@pytest.fixture
+def lzma_file(tmp_path):
+    "Create compressed empty file"
+    lzma_db_file = tmp_path / "test.db.lzma"
+    with lzma.open(lzma_db_file, "w") as f:
+        f.write(b"")
+    return lzma_db_file
+
+@pytest_asyncio.fixture
+async def adb(lzma_file):
+    async_db = SQLiteBackend(lzma_file)
+    await async_db.db_init()
+    try:
+        yield async_db
+    finally:
+        await async_db.conn.close()
 
 async def test_prepare_db(adb):
     table_name = "test"

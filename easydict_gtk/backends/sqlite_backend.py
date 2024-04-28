@@ -1,13 +1,21 @@
 from pathlib import Path
 import aiosqlite
+import sqlite3
 import re
-from typing import AsyncIterator, Coroutine
+from typing import AsyncIterator, Coroutine, Any
+import lzma
 
 # internal imports
 from .backend import DBBackend, Result
 
 # TODO: import it from settings, not hardcode it
-FILE_DB = Path(__file__).parent.parent / "dict_data/sqlite_eng-cze.db"
+FILE_DB = Path(__file__).parent.parent / "dict_data/sqlite_eng-cze.db.lzma"
+
+
+class MimeTypeMismatch(Exception):
+    """Thrown when mimetype is mismatch."""
+
+    pass
 
 
 class SQLiteBackend(DBBackend):
@@ -17,23 +25,43 @@ class SQLiteBackend(DBBackend):
         reg = re.compile(expr, re.IGNORECASE)
         return reg.search(item) is not None
 
-    def __init__(self, file=FILE_DB):
+    def __init__(self, file: Path = FILE_DB):
+        # firstly check if file exists
         try:
-            self.db_file = file
-            if not self.db_file.exists():
+            if not file.exists():
                 raise FileNotFoundError()
         except FileNotFoundError:
-            print(f"DB file {self.db_file} not found.")
+            print(f"DB file {file} not found.")
             exit()
 
-    async def db_init(self, memory=True):
-        if memory:
-            self.conn = await aiosqlite.connect(":memory:")
-            async with aiosqlite.connect(self.db_file) as conn_file:
-                await conn_file.backup(self.conn)
-        else:
-            self.conn = await aiosqlite.connect(self.db_file)
+        # check correct mimetype
+        print(file.suffix)
+        if file.suffix != ".lzma":
+            raise MimeTypeMismatch("SQLiteBackend can take only *.lzma files")
+
+        self.db_file = file
+
+    async def db_init(self):
+        def connect(
+            database: Path,
+            *,
+            iter_chunk_size=64,
+            **kwargs: Any,
+        ) -> aiosqlite.Connection:
+            """Create and return a connection proxy to the sqlite database."""
+
+            def connector() -> sqlite3.Connection:
+                compressed_db_bytes = database.read_bytes()
+                db_bytes = lzma.decompress(compressed_db_bytes)
+                sqlite_connection = sqlite3.connect(":memory", **kwargs)
+                sqlite_connection.deserialize(db_bytes)
+                return sqlite_connection
+
+            return aiosqlite.Connection(connector, iter_chunk_size)
+
+        self.conn = await connect(self.db_file)
         await self.conn.create_function("REGEXP", 2, self.regexp)
+        print("dostal jsem se az SEEEEEEEEm")
 
     async def prepare_db(self, db_name: str):
         """It creates a table in the database.
