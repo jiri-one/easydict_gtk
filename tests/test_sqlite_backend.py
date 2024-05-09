@@ -145,12 +145,23 @@ async def test_memory_db(tmp_path, raw_file):
     """All other tests are with SQLiteBackend(file, memory_only=True), so they are operating only with memory, but this test is with argument memory_only=False, so we need to test, if changes are propagated to file itself"""
     file_db = tmp_path / "test.db"
     file_db.touch()
+    assert not file_db.read_bytes()  # file_db is empty
     async_db = SQLiteBackend(file_db, memory_only=False)
     await async_db.db_init()
     await async_db.prepare_db()  # create table
     await async_db.fill_db(raw_file)  # fill table with dummy data from dummy file
     assert file_db.read_bytes()  # file_db is filled
     # test whole_word search on filled memory
+    async for result in async_db.search_in_db(
+        word="english", lang="eng", search_type="whole_word"
+    ):
+        assert result.cze == "czech"
+    await async_db.conn.close()
+    del async_db
+
+    # read again the db_file a try search again, the data should be permanent
+    async_db = SQLiteBackend(file_db, memory_only=False)
+    await async_db.db_init()
     async for result in async_db.search_in_db(
         word="english", lang="eng", search_type="whole_word"
     ):
