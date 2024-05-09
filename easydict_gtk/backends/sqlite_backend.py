@@ -25,13 +25,16 @@ class SQLiteBackend(DBBackend):
         reg = re.compile(expr, re.IGNORECASE)
         return reg.search(item) is not None
 
-    def __init__(self, file: Path = FILE_DB, memory_only: bool = True):
+    def __init__(
+        self, file: Path = FILE_DB, db_name="eng_cze", memory_only: bool = True
+    ):
         """The main and only one mandatory argument is "file"
         file: for testing purposes it can be uncompressed sqlite db file, but in production it will use lzma compressed db file
         memory_only: everything changed in db will be lost after program end
         """
 
         self.memory_only = memory_only
+        self.db_name = db_name
 
         # firstly check if file exists
         try:
@@ -75,13 +78,13 @@ class SQLiteBackend(DBBackend):
         self.conn = await connect(self.db_file)
         await self.conn.create_function("REGEXP", 2, self.regexp)
 
-    async def prepare_db(self, db_name: str):
+    async def prepare_db(self):
         """It creates a table in the database.
         A method that is not used in production, because it is not needed for running EasyDict.
         This method was needed when I created dictionary data.
         """
 
-        sql = f"""CREATE TABLE if not exists {db_name}
+        sql = f"""CREATE TABLE if not exists {self.db_name}
                   (eng TEXT, cze TEXT, notes TEXT,
                    special TEXT, author TEXT)
                 """
@@ -89,14 +92,7 @@ class SQLiteBackend(DBBackend):
         await self.conn.commit()
 
         if not self.memory_only:
-            if self.lzma_compressed:
-                with open(self.db_file, "w+b") as lzma_file:
-                    lzma_file.write(
-                        lzma.compress(self.conn._conn.serialize(name=db_name))
-                    )
-            else:
-                async with aiosqlite.connect(self.db_file) as conn_file:
-                    await self.conn.backup(conn_file)
+            await self.write_to_file()
 
     async def fill_db(self, raw_file: Path = None):
         """Filling the database with data.
@@ -121,7 +117,9 @@ class SQLiteBackend(DBBackend):
                         ),  # sometimes there are some unnecessary new lines
                     )
                 )
-        await self.conn.executemany("INSERT INTO eng_cze VALUES (?,?,?,?,?)", data)
+        await self.conn.executemany(
+            f"INSERT INTO {self.db_name} VALUES (?,?,?,?,?)", data
+        )
         # save data
         await self.conn.commit()
 
@@ -131,14 +129,27 @@ class SQLiteBackend(DBBackend):
 
     async def search_in_db(self, word, lang, search_type: str) -> AsyncIterator[Result]:
         if search_type == "fulltext":
-            sql = (f"SELECT * FROM eng_cze WHERE {lang} LIKE ?", [f"%{word}%"])
+            sql = (f"SELECT * FROM {self.db_name} WHERE {lang} LIKE ?", [f"%{word}%"])
         elif search_type == "whole_word":
-            sql = (f"SELECT * FROM eng_cze WHERE {lang} REGEXP ?", [rf"\b{word}\b"])
+            sql = (
+                f"SELECT * FROM {self.db_name} WHERE {lang} REGEXP ?",
+                [rf"\b{word}\b"],
+            )
         elif search_type == "first_chars":
-            sql = (f"SELECT * FROM eng_cze WHERE {lang} LIKE ?", [f"{word}%"])
+            sql = (f"SELECT * FROM {self.db_name} WHERE {lang} LIKE ?", [f"{word}%"])
         else:
             raise ValueError("Unknown search_type argument.")
 
         async with self.conn.execute(*sql) as cursor:
             async for row in cursor:
                 yield Result(*row)
+
+    async def write_to_file(self):
+        if self.lzma_compressed:
+            with open(self.db_file, "w+b") as lzma_file:
+                lzma_file.write(
+                    lzma.compress(self.conn._conn.serialize(name=self.db_name))
+                )
+        else:
+            async with aiosqlite.connect(self.db_file) as conn_file:
+                await self.conn.backup(conn_file)

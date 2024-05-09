@@ -63,6 +63,7 @@ async def adb(tmp_path, request: pytest.FixtureRequest):
 # TESTS
 async def test_prepare_db(adb):
     table_name = "test"
+    adb.db_name = table_name
     sql = (
         f"SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
         [f"{table_name}"],
@@ -72,7 +73,7 @@ async def test_prepare_db(adb):
         results = await cursor.fetchall()  # result format is here [(0,)]
         assert results[0][0] == 0  # should find 0 match, table wasn't created yet
 
-    await adb.prepare_db(table_name)  # create table
+    await adb.prepare_db()  # create table
 
     async with adb.conn.execute(*sql) as cursor:
         results = await cursor.fetchall()
@@ -84,7 +85,7 @@ async def test_prepare_db(adb):
 
 
 async def test_fill_db(adb, raw_file, dummy_data):
-    await adb.prepare_db("eng_cze")  # create table
+    await adb.prepare_db()  # create table
     await adb.fill_db(raw_file)  # fill table with dummy data from dummy file
     sql = "SELECT * FROM eng_cze"  # get all data from table
     dummy_data = dummy_data.split("\n")  # split dummy data by new line
@@ -99,7 +100,7 @@ async def test_fill_db(adb, raw_file, dummy_data):
 
 
 async def test_search_in_db(adb, raw_file):
-    await adb.prepare_db("eng_cze")  # create table
+    await adb.prepare_db()  # create table
 
     search = adb.search_in_db(word="test", lang="eng", search_type="fulltext")
     async for x in search:
@@ -115,7 +116,7 @@ async def test_search_in_db(adb, raw_file):
 
 
 async def test_search_in_db_with_all_search_types(adb, raw_file):
-    await adb.prepare_db("eng_cze")  # create table
+    await adb.prepare_db()  # create table
     await adb.fill_db(raw_file)  # fill table with dummy data from dummy file
     # test fulltext search
     async for result in adb.search_in_db(
@@ -146,9 +147,9 @@ async def test_memory_db(tmp_path, raw_file):
     file_db.touch()
     async_db = SQLiteBackend(file_db, memory_only=False)
     await async_db.db_init()
-    await async_db.prepare_db("eng_cze")  # create table
+    await async_db.prepare_db()  # create table
     await async_db.fill_db(raw_file)  # fill table with dummy data from dummy file
-    assert file_db.read_text() == ""  # file_db is untouched / empty
+    assert file_db.read_bytes()  # file_db is filled
     # test whole_word search on filled memory
     async for result in async_db.search_in_db(
         word="english", lang="eng", search_type="whole_word"
