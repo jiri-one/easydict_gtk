@@ -1,13 +1,15 @@
 import pytest
 import pytest_asyncio
 import lzma
+from pathlib import Path
 
 # internal imports
 from easydict_gtk.backends.sqlite_backend import SQLiteBackend
 from easydict_gtk.backends.backend import Result
 
 # type anotations
-adb: SQLiteBackend
+empty_adb: SQLiteBackend
+
 
 @pytest.fixture
 def dummy_data():
@@ -18,30 +20,47 @@ english	czech	notes	specials	authors
     """.strip()
 
 
+#
+# helper functions
+#
+def lzma_file(tmp_path: Path):
+    "Create compressed empty file"
+    file_db = tmp_path / "test.db"
+    file_db.write_bytes(b"")
+    lzma_db_file = tmp_path / "test.db.lzma"
+    with lzma.open(lzma_db_file, "w") as f:
+        f.write(file_db.read_bytes())
+    return lzma_db_file
+
+
+def db_file(tmp_path: Path):
+    file_db = tmp_path / "test.db"
+    file_db.touch()
+    return file_db
+
+
+#
+# fixtures
+#
 @pytest.fixture
-def raw_file(tmp_path, dummy_data):
+def raw_file(tmp_path: Path, dummy_data):
     file = tmp_path / "raw_file.txt"
     file.write_text(dummy_data)
     return file
 
 
-@pytest.fixture
-def lzma_file(tmp_path):
-    "Create compressed empty file"
-    lzma_db_file = tmp_path / "test.db.lzma"
-    with lzma.open(lzma_db_file, "w") as f:
-        f.write(b"")
-    return lzma_db_file
-
-@pytest_asyncio.fixture
-async def adb(lzma_file):
-    async_db = SQLiteBackend(lzma_file)
+@pytest_asyncio.fixture(params=[db_file, lzma_file])
+async def adb(tmp_path, request: pytest.FixtureRequest):
+    file = request.param(tmp_path)
+    async_db = SQLiteBackend(file)
     await async_db.db_init()
     try:
         yield async_db
     finally:
         await async_db.conn.close()
 
+
+# TESTS
 async def test_prepare_db(adb):
     table_name = "test"
     sql = (
@@ -122,11 +141,11 @@ async def test_search_in_db_with_all_search_types(adb, raw_file):
 
 
 async def test_memory_db(tmp_path, raw_file):
-    """All other tests are with db_init(memory=False), so they are operating with real file, but this test is with memory=True"""
+    """All other tests are with SQLiteBackend(file, memory_only=True), so they are operating only with memory, but this test is with argument memory_only=False, so we need to test, if changes are propagated to file itself"""
     file_db = tmp_path / "test.db"
     file_db.touch()
-    async_db = SQLiteBackend(file_db)
-    await async_db.db_init(memory=True)
+    async_db = SQLiteBackend(file_db, memory_only=False)
+    await async_db.db_init()
     await async_db.prepare_db("eng_cze")  # create table
     await async_db.fill_db(raw_file)  # fill table with dummy data from dummy file
     assert file_db.read_text() == ""  # file_db is untouched / empty

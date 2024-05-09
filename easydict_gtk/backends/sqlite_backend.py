@@ -25,20 +25,31 @@ class SQLiteBackend(DBBackend):
         reg = re.compile(expr, re.IGNORECASE)
         return reg.search(item) is not None
 
-    def __init__(self, file: Path = FILE_DB):
+    def __init__(self, file: Path = FILE_DB, memory_only: bool = True):
+        """The main and only one mandatory argument is "file"
+        file: for testing purposes it can be uncompressed sqlite db file, but in production it will use lzma compressed db file
+        memory_only: everything changed in db will be lost after program end
+        """
+
+        self.memory_only = memory_only
+
         # firstly check if file exists
         try:
             if not file.exists():
                 raise FileNotFoundError()
         except FileNotFoundError:
-            print(f"DB file {file} not found.")
+            print(f"File {file} not found.")
             exit()
 
-        # check correct mimetype
-        print(file.suffix)
-        if file.suffix != ".lzma":
-            raise MimeTypeMismatch("SQLiteBackend can take only *.lzma files")
+        # check correct mimetype (only suffixes)
+        if file.suffixes != [".db", ".lzma"] and file.suffixes != [".db"]:
+            raise MimeTypeMismatch(
+                "SQLiteBackend can take only SQLite *.db files or *.lzma files, which are LZMA compressed db files."
+            )
 
+        self.lzma_compressed = False
+        if file.suffixes == [".db", ".lzma"]:
+            self.lzma_compressed = True
         self.db_file = file
 
     async def db_init(self):
@@ -51,27 +62,41 @@ class SQLiteBackend(DBBackend):
             """Create and return a connection proxy to the sqlite database."""
 
             def connector() -> sqlite3.Connection:
-                compressed_db_bytes = database.read_bytes()
-                db_bytes = lzma.decompress(compressed_db_bytes)
-                sqlite_connection = sqlite3.connect(":memory", **kwargs)
-                sqlite_connection.deserialize(db_bytes)
+                sqlite_connection = sqlite3.connect(":memory:", **kwargs)
+                self.file_db_bytes = database.read_bytes()
+                if self.lzma_compressed:
+                    self.file_db_bytes = lzma.decompress(self.file_db_bytes)
+                if self.file_db_bytes:  # the db is filled by data
+                    sqlite_connection.deserialize(self.file_db_bytes)
                 return sqlite_connection
 
             return aiosqlite.Connection(connector, iter_chunk_size)
 
         self.conn = await connect(self.db_file)
         await self.conn.create_function("REGEXP", 2, self.regexp)
-        print("dostal jsem se az SEEEEEEEEm")
 
     async def prepare_db(self, db_name: str):
         """It creates a table in the database.
-        A method that is not (yet) used in production."""
+        A method that is not used in production, because it is not needed for running EasyDict.
+        This method was needed when I created dictionary data.
+        """
+
         sql = f"""CREATE TABLE if not exists {db_name}
                   (eng TEXT, cze TEXT, notes TEXT,
                    special TEXT, author TEXT)
                 """
         await self.conn.execute(sql)
         await self.conn.commit()
+
+        if not self.memory_only:
+            if self.lzma_compressed:
+                with open(self.db_file, "w+b") as lzma_file:
+                    lzma_file.write(
+                        lzma.compress(self.conn._conn.serialize(name=db_name))
+                    )
+            else:
+                async with aiosqlite.connect(self.db_file) as conn_file:
+                    await self.conn.backup(conn_file)
 
     async def fill_db(self, raw_file: Path = None):
         """Filling the database with data.
