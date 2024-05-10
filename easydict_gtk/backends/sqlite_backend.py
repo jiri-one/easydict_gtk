@@ -123,6 +123,9 @@ class SQLiteBackend(DBBackend):
         # save data
         await self.conn.commit()
 
+        if not self.memory_only:
+            await self.write_to_file()
+
     async def search_async(self, word, lang, search_type: str) -> Coroutine | None:
         """Helper coroutine to call search_sorted coroutine - in the future we can add here some logging or stats or something else."""
         return await self.search_sorted(word, lang, search_type)
