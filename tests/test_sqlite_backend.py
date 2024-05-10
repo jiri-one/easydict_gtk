@@ -21,7 +21,7 @@ english	czech	notes	specials	authors
 
 
 #
-# helper functions
+# helper functions and coroutines
 #
 def lzma_file(tmp_path: Path):
     "Create compressed empty file"
@@ -37,6 +37,14 @@ def db_file(tmp_path: Path):
     file_db = tmp_path / "test.db"
     file_db.touch()
     return file_db
+
+
+async def search_word_and_close_db(async_db):
+    """Helper function which search word only and check, if there is a correct result."""
+    async for result in async_db.search_in_db(
+        word="english", lang="eng", search_type="whole_word"
+    ):
+        return result.cze
 
 
 #
@@ -143,13 +151,6 @@ async def test_search_in_db_with_all_search_types(adb, raw_file):
 
 async def test_memory_db_with_db_file(tmp_path, raw_file):
     """All other tests are with SQLiteBackend(file, memory_only=True), so they are operating only with memory, but this test is with argument memory_only=False, so we need to test, if changes are propagated to file itself"""
-
-    async def search_word_and_close_db(async_db):
-        """Helper function which search word only and check, if there is a correct result."""
-        async for result in async_db.search_in_db(
-            word="english", lang="eng", search_type="whole_word"
-        ):
-            return result.cze
 
     file_db = db_file(tmp_path)
     assert not file_db.read_bytes()  # file_db is empty
