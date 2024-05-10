@@ -151,8 +151,7 @@ async def test_memory_db_with_db_file(tmp_path, raw_file):
         ):
             return result.cze
 
-    file_db = tmp_path / "test.db"
-    file_db.touch()
+    file_db = db_file(tmp_path)
     assert not file_db.read_bytes()  # file_db is empty
     async_db = SQLiteBackend(file_db, memory_only=False)
     await async_db.db_init()
