@@ -9,7 +9,7 @@ gi.require_version("Gtk", "4.0")
 from gi.repository import Gtk, Gio, GLib, Gdk, GdkPixbuf, GObject, Adw
 
 # internal imports
-from backends.sqlite_backend import search_async
+from backends.sqlite_backend import SQLiteBackend
 from settings import ed_setup, LANGUAGES_DATA as lng_data
 from .dialogs import SettingsDialog
 from .drop_down import LanguageDropdown
@@ -76,6 +76,10 @@ class SearchBar(Gtk.SearchBar):
         # Turn ON search mode
         self.set_search_mode(True)
 
+        # initialization of async SQLiteBackend
+        self.adb = SQLiteBackend()
+        asyncio.run(self.adb.db_init())
+
     def show_new_results(self, result_strings=None):
         # and with results we need to update the ListViewString store - it is StringList
         store = self.win.listview_str.store
@@ -90,7 +94,7 @@ class SearchBar(Gtk.SearchBar):
         lng2 = [lang for lang in ["cze", "eng"] if lang != lng1][0]
 
         result_strings = list()
-        self.task = asyncio.create_task(search_async(word, lng, search_type))
+        self.task = asyncio.create_task(self.adb.search_async(word, lng, search_type))
         results = await self.task
         if results:
             for item in results.items:

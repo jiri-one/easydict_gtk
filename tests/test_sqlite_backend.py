@@ -1,24 +1,14 @@
 import pytest
 import pytest_asyncio
+import lzma
+from pathlib import Path
 
 # internal imports
-from easydict_gtk.backends.sqlite_backend import search_async, SQLiteBackend
+from easydict_gtk.backends.sqlite_backend import SQLiteBackend
 from easydict_gtk.backends.backend import Result
 
 # type anotations
-adb: SQLiteBackend
-
-
-@pytest_asyncio.fixture
-async def adb(tmp_path):
-    file_db = tmp_path / "test.db"
-    file_db.touch()
-    async_db = SQLiteBackend(file_db)
-    await async_db.db_init(memory=False)
-    try:
-        yield async_db
-    finally:
-        await async_db.conn.close()
+empty_adb: SQLiteBackend
 
 
 @pytest.fixture
@@ -30,15 +20,58 @@ english	czech	notes	specials	authors
     """.strip()
 
 
+#
+# helper functions and coroutines
+#
+def lzma_file(tmp_path: Path):
+    "Create compressed empty file"
+    file_db = tmp_path / "test.db"
+    file_db.write_bytes(b"")
+    lzma_db_file = tmp_path / "test.db.lzma"
+    with lzma.open(lzma_db_file, "w") as f:
+        f.write(file_db.read_bytes())
+    return lzma_db_file
+
+
+def db_file(tmp_path: Path):
+    file_db = tmp_path / "test.db"
+    file_db.touch()
+    return file_db
+
+
+async def search_word_and_close_db(async_db):
+    """Helper function which search word only and check, if there is a correct result."""
+    async for result in async_db.search_in_db(
+        word="english", lang="eng", search_type="whole_word"
+    ):
+        return result.cze
+
+
+#
+# fixtures
+#
 @pytest.fixture
-def raw_file(tmp_path, dummy_data):
+def raw_file(tmp_path: Path, dummy_data):
     file = tmp_path / "raw_file.txt"
     file.write_text(dummy_data)
     return file
 
 
+@pytest_asyncio.fixture(params=[db_file, lzma_file])
+async def adb(tmp_path, request: pytest.FixtureRequest):
+    file = request.param(tmp_path)
+    async_db = SQLiteBackend(file)
+    await async_db.db_init()
+    try:
+        yield async_db
+    finally:
+        await async_db.conn.close()
+
+
+# TESTS
 async def test_prepare_db(adb):
     table_name = "test"
+    adb.db_name = table_name
     sql = (
         f"SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
         [f"{table_name}"],
@@ -48,7 +81,7 @@ async def test_prepare_db(adb):
         results = await cursor.fetchall()  # result format is here [(0,)]
         assert results[0][0] == 0  # should find 0 match, table wasn't created yet
 
-    await adb.prepare_db(table_name)  # create table
+    await adb.prepare_db()  # create table
 
     async with adb.conn.execute(*sql) as cursor:
         results = await cursor.fetchall()
@@ -60,7 +93,7 @@ async def test_prepare_db(adb):
 
 
 async def test_fill_db(adb, raw_file, dummy_data):
-    await adb.prepare_db("eng_cze")  # create table
+    await adb.prepare_db()  # create table
     await adb.fill_db(raw_file)  # fill table with dummy data from dummy file
     sql = "SELECT * FROM eng_cze"  # get all data from table
     dummy_data = dummy_data.split("\n")  # split dummy data by new line
@@ -75,7 +108,7 @@ async def test_fill_db(adb, raw_file, dummy_data):
 
 
 async def test_search_in_db(adb, raw_file):
-    await adb.prepare_db("eng_cze")  # create table
+    await adb.prepare_db()  # create table
 
     search = adb.search_in_db(word="test", lang="eng", search_type="fulltext")
     async for x in search:
@@ -91,7 +124,7 @@ async def test_search_in_db(adb, raw_file):
 
 
 async def test_search_in_db_with_all_search_types(adb, raw_file):
-    await adb.prepare_db("eng_cze")  # create table
+    await adb.prepare_db()  # create table
     await adb.fill_db(raw_file)  # fill table with dummy data from dummy file
     # test fulltext search
     async for result in adb.search_in_db(
@@ -116,18 +149,25 @@ async def test_search_in_db_with_all_search_types(adb, raw_file):
             assert False  # this will never run if no results are found
 
 
-async def test_memory_db(tmp_path, raw_file):
-    """All other tests are with db_init(memory=False), so they are operating with real file, but this test is with memory=True"""
-    file_db = tmp_path / "test.db"
-    file_db.touch()
-    async_db = SQLiteBackend(file_db)
-    await async_db.db_init(memory=True)
-    await async_db.prepare_db("eng_cze")  # create table
+async def test_memory_db_with_db_file(tmp_path, raw_file):
+    """All other tests are with SQLiteBackend(file, memory_only=True), so they are operating only with memory, but this test is with argument memory_only=False, so we need to test, if changes are propagated to file itself"""
+
+    file_db = db_file(tmp_path)
+    assert not file_db.read_bytes()  # file_db is empty
+    async_db = SQLiteBackend(file_db, memory_only=False)
+    await async_db.db_init()
+    await async_db.prepare_db()  # create table
+    assert not await search_word_and_close_db(async_db)  # no results
     await async_db.fill_db(raw_file)  # fill table with dummy data from dummy file
-    assert file_db.read_text() == ""  # file_db is untouched / empty
+    assert file_db.read_bytes()  # file_db is filled
     # test whole_word search on filled memory
-    async for result in async_db.search_in_db(
-        word="english", lang="eng", search_type="whole_word"
-    ):
-        assert result.cze == "czech"
+    assert "czech" == await search_word_and_close_db(async_db)
     await async_db.conn.close()
+    del async_db
+
+    # read again the db_file a try search again, the data should be permanent
+    async_db = SQLiteBackend(file_db)
+    await async_db.db_init()
+    assert "czech" == await search_word_and_close_db(async_db)
+    await async_db.conn.close()
+    print("dostal jsem se sem")
