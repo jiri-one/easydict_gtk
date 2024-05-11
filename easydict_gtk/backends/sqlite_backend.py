@@ -26,7 +26,7 @@ class SQLiteBackend(DBBackend):
         return reg.search(item) is not None
 
     def __init__(
-        self, file: Path = FILE_DB, db_name="eng_cze", memory_only: bool = True
+        self, file: Path = FILE_DB, table_name="eng_cze", memory_only: bool = True
     ):
         """The main and only one mandatory argument is "file"
         file: for testing purposes it can be uncompressed sqlite db file, but in production it will use lzma compressed db file
@@ -34,7 +34,7 @@ class SQLiteBackend(DBBackend):
         """
 
         self.memory_only = memory_only
-        self.db_name = db_name
+        self.table_name = table_name
 
         # firstly check if file exists
         try:
@@ -84,14 +84,17 @@ class SQLiteBackend(DBBackend):
         This method was needed when I created dictionary data.
         """
 
-        sql = f"""CREATE TABLE if not exists {self.db_name}
+        sql = f"""CREATE TABLE if not exists {self.table_name}
                   (eng TEXT, cze TEXT, notes TEXT,
                    special TEXT, author TEXT)
                 """
         await self.conn.execute(sql)
+
+        # save data to memory
         await self.conn.commit()
 
         if not self.memory_only:
+            # save data to the file too
             await self.write_to_file()
 
     async def fill_db(self, raw_file: Path = None):
@@ -118,12 +121,13 @@ class SQLiteBackend(DBBackend):
                     )
                 )
         await self.conn.executemany(
-            f"INSERT INTO {self.db_name} VALUES (?,?,?,?,?)", data
+            f"INSERT INTO {self.table_name} VALUES (?,?,?,?,?)", data
         )
-        # save data
+        # save data to memory
         await self.conn.commit()
 
         if not self.memory_only:
+            # save data to the file too
             await self.write_to_file()
 
     async def search_async(self, word, lang, search_type: str) -> Coroutine | None:
@@ -132,14 +136,17 @@ class SQLiteBackend(DBBackend):
 
     async def search_in_db(self, word, lang, search_type: str) -> AsyncIterator[Result]:
         if search_type == "fulltext":
-            sql = (f"SELECT * FROM {self.db_name} WHERE {lang} LIKE ?", [f"%{word}%"])
+            sql = (
+                f"SELECT * FROM {self.table_name} WHERE {lang} LIKE ?",
+                [f"%{word}%"],
+            )
         elif search_type == "whole_word":
             sql = (
-                f"SELECT * FROM {self.db_name} WHERE {lang} REGEXP ?",
+                f"SELECT * FROM {self.table_name} WHERE {lang} REGEXP ?",
                 [rf"\b{word}\b"],
             )
         elif search_type == "first_chars":
-            sql = (f"SELECT * FROM {self.db_name} WHERE {lang} LIKE ?", [f"{word}%"])
+            sql = (f"SELECT * FROM {self.table_name} WHERE {lang} LIKE ?", [f"{word}%"])
         else:
             raise ValueError("Unknown search_type argument.")
 
@@ -149,10 +156,10 @@ class SQLiteBackend(DBBackend):
 
     async def write_to_file(self):
         if self.lzma_compressed:
+            temp_sqlite_db = sqlite3.connect(":memory:")
+            await self.conn.backup(temp_sqlite_db)
             with open(self.db_file, "w+b") as lzma_file:
-                lzma_file.write(
-                    lzma.compress(self.conn._conn.serialize(name=self.db_name))
-                )
+                lzma_file.write(lzma.compress(temp_sqlite_db.serialize()))
         else:
             async with aiosqlite.connect(self.db_file) as conn_file:
                 await self.conn.backup(conn_file)

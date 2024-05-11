@@ -26,7 +26,7 @@ english	czech	notes	specials	authors
 def lzma_file(tmp_path: Path):
     "Create compressed empty file"
     file_db = tmp_path / "test.db"
-    file_db.write_bytes(b"")
+    file_db.touch()
     lzma_db_file = tmp_path / "test.db.lzma"
     with lzma.open(lzma_db_file, "w") as f:
         f.write(file_db.read_bytes())
@@ -71,7 +71,7 @@ async def adb(tmp_path, request: pytest.FixtureRequest):
 # TESTS
 async def test_prepare_db(adb):
     table_name = "test"
-    adb.db_name = table_name
+    adb.table_name = table_name
     sql = (
         f"SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?",
         [f"{table_name}"],
@@ -149,25 +149,30 @@ async def test_search_in_db_with_all_search_types(adb, raw_file):
             assert False  # this will never run if no results are found
 
 
-async def test_memory_db_with_db_file(tmp_path, raw_file):
-    """All other tests are with SQLiteBackend(file, memory_only=True), so they are operating only with memory, but this test is with argument memory_only=False, so we need to test, if changes are propagated to file itself"""
+@pytest.mark.parametrize(argnames="lzma_or_db_file", argvalues=[db_file, lzma_file])
+async def test_with_real_db_file(tmp_path, raw_file, lzma_or_db_file):
+    """All other tests are with SQLiteBackend(file, memory_only=True), so they are operating only with memory, but this test is with argument memory_only=False, so we need to test, if changes are propagated to file itself.
+    This test is invoked two times: with uncompressed db_file and with lzma compressed file.
+    """
 
-    file_db = db_file(tmp_path)
-    assert not file_db.read_bytes()  # file_db is empty
+    file_db = lzma_or_db_file(tmp_path)  # create empty file
     async_db = SQLiteBackend(file_db, memory_only=False)
     await async_db.db_init()
-    await async_db.prepare_db()  # create table
+    await async_db.prepare_db()  # create empty table
+    assert file_db.read_bytes()  # file_db is not empty
+    file_db_bytes = file_db.read_bytes()  # bytes after prepare_db()
     assert not await search_word_and_close_db(async_db)  # no results
     await async_db.fill_db(raw_file)  # fill table with dummy data from dummy file
-    assert file_db.read_bytes()  # file_db is filled
+
+    assert file_db_bytes != file_db.read_bytes()  # check iw fill_db() modified db_file
+
     # test whole_word search on filled memory
     assert "czech" == await search_word_and_close_db(async_db)
-    await async_db.conn.close()
+    await async_db.conn.close()  # close the db connection
     del async_db
 
-    # read again the db_file a try search again, the data should be permanent
+    # read again the db_file and try search again, the data should be permanent
     async_db = SQLiteBackend(file_db)
     await async_db.db_init()
     assert "czech" == await search_word_and_close_db(async_db)
     await async_db.conn.close()
-    print("dostal jsem se sem")
