@@ -40,8 +40,11 @@ class MenuButton(Gtk.MenuButton):
         self.win.add_action(action)
         # Create a new "Action for Quit button"
         action = Gio.SimpleAction.new("quit", None)
-        action.connect("activate", lambda *args: self.win.destroy())
+        action.connect("activate", lambda *args: self.close_app())
         self.win.add_action(action)
+
+    def close_app(self):
+        self.win.app.quit()
 
     def create_settings_dialog(self):
         sd = SettingsDialog(self.win)

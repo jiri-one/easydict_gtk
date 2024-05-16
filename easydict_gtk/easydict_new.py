@@ -21,13 +21,15 @@ from widgets import ResultListViewStrings, SearchBar, FrontPage, MenuButton, Tra
 
 
 class MyWindow(Adw.ApplicationWindow):
-    def __init__(self, title, loop, **kwargs):
-        super(MyWindow, self).__init__(**kwargs)
+    def __init__(self, title, loop, app, **kwargs):
+        super().__init__(application=app)
+        self.app = app
         self._loop = loop
         self.task = None
-        self.tray = TrayIcon(app=kwargs["application"], win=self)
+        self.tray = TrayIcon(win=self)
         self.connect("notify::default-width", self.on_size_changed)
         self.connect("notify::default-height", self.on_size_changed)
+        self.connect("close-request", self.on_close_button)
         self.load_css("ui/search_box.css")
         # set initial size of the window from settings
         self.set_default_size(ed_setup.win_width, ed_setup.win_height)
@@ -142,6 +144,10 @@ class MyWindow(Adw.ApplicationWindow):
             # ed_setup.write_settings("win_width", self.props.default_width)
             # ed_setup.write_settings("win_height", self.props.default_height)
 
+    def on_close_button(self, widget):
+        self.hide()
+        return True
+
 
 class Application(Adw.Application):
     """Main Aplication class"""
@@ -156,7 +162,7 @@ class Application(Adw.Application):
     def do_activate(self):
         win = self.props.active_window
         if not win:
-            win = MyWindow("EasyDict-GTK", loop=self._loop, application=self)
+            win = MyWindow("EasyDict-GTK", loop=self._loop, app=self)
         win.present()
 
 
@@ -188,6 +194,5 @@ def main(args=sys.argv[1:]):
     app.run()
 
 
-print("tak kam?")
 if __name__ == "__main__":
     main()
