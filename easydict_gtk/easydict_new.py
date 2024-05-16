@@ -44,6 +44,7 @@ class MyWindow(Adw.ApplicationWindow):
         # Add Options button (Menu content is defined inside the MenuButton class)
         option_btn = MenuButton(self)
         header.pack_start(option_btn)
+        header.set_decoration_layout("icon:close")
         self.search = SearchBar(loop, self)
         self.front_page = FrontPage()
         self.stack = Adw.ViewStack()
