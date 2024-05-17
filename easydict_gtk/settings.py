@@ -82,7 +82,7 @@ class Settings:
                 else:  # value is string
                     value = self.ed_config.get(key, default_value)
             except ValueError as e:
-                e.message = "\n\nSomething went wrong, you have been writed bad value type for some key, best solution is to delete this file and let EasyDict to create new one.\n\n"
+                e.message = "\n\nSomething went wrong, you have been written bad value type for some key, best solution is to delete this file and let EasyDict to create new one.\n\n"
                 raise
             # set all keys and values like this object attributes
             setattr(self, key, value)

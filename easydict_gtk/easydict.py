@@ -1,230 +1,203 @@
-import gi
+"""
+EasyDict-GTK - Python Gtk4 based Application
+"""
 import sys
+import os
 from pathlib import Path
+import asyncio
+from threading import Thread
+from queue import Queue
+
+import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 
-from gi.repository import Gtk, Adw
-from sys import modules
-from os import environ
+from gi.repository import Gtk, GLib, GObject, Gio, Adw, Gdk
 
-# imports from my other files with classes and methods
-
-package = Path(__file__).parent.parent
-sys.path.append(str(package))
-
-from easydict_gtk.utils import db_search
-from easydict_gtk.handlers import Handlers
-from easydict_gtk.settings import cwd, images, Settings
+# internal imports
+from settings import images, ed_setup
+from widgets import ResultListViewStrings, SearchBar, FrontPage, MenuButton, TrayIcon
 
 
-class MainWindow(Gtk.ApplicationWindow):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # some variables
-        self.search_fulltext = False
-        # basic window settings
-        self.set_default_size(360, 640)
-        self.set_title("EasyDict-GTK")
-        # header bar
-        self.header = Gtk.HeaderBar()
-        self.set_titlebar(self.header)
-        pref_icon = Gtk.Image.new_from_file(
-            str(Path(__file__).parent / "images/ed_pref_icon.png")
+class MyWindow(Adw.ApplicationWindow):
+    def __init__(self, title, loop, app, **kwargs):
+        super().__init__(application=app)
+        self.app = app
+        self._loop = loop
+        self.task = None
+        self.tray = TrayIcon(win=self)
+        self.connect("notify::default-width", self.on_size_changed)
+        self.connect("notify::default-height", self.on_size_changed)
+        # self.connect("close-request", self.on_close_button)
+        self.load_css("ui/search_box.css")
+        # set initial size of the window from settings
+        self.set_default_size(ed_setup.win_width, ed_setup.win_height)
+        self.set_title(title)
+        self.main_box = Gtk.Box()
+        self.main_box.props.orientation = Gtk.Orientation.VERTICAL
+        title_label = Gtk.Label.new()
+        title_label.set_justify(Gtk.Justification.CENTER)
+        title_label.set_markup(
+            "EasyDict-GTK\n<small>Completely open translator</small>"
         )
-        self.open_button = Gtk.Button(label="Settings")
-        self.open_button.set_child(pref_icon)
-        self.header.pack_start(self.open_button)
-        # widget for data visualization
-        self.store = Gtk.ListStore(str, str, str, str)
-        treeview = Gtk.TreeView(model=self.store)
-        column = Gtk.TreeViewColumn("Results:")
-        cze = Gtk.CellRendererText()
-        eng = Gtk.CellRendererText()
-        column.pack_start(cze, True)
-        column.pack_start(eng, True)
-        column.add_attribute(cze, "text", 0)
-        column.add_attribute(eng, "text", 1)
-        select = treeview.get_selection()
-        select.connect("changed", self.on_tree_selection_changed)
-        treeview.append_column(column)
+        header = Gtk.HeaderBar()
+        header.set_title_widget(title_label)
+        # Add Options button (Menu content is defined inside the MenuButton class)
+        option_btn = MenuButton(self)
+        header.pack_start(option_btn)
+        header.set_decoration_layout("icon:minimize")
+        self.search = SearchBar(loop, self)
+        self.front_page = FrontPage()
+        self.stack = Adw.ViewStack()
+        self.main_box.append(header)
+        self.main_box.append(self.search)
+        self.main_box.append(self.front_page)
+        content = self.setup_content()
+        self.stack.add(content)
+        self.set_content(self.main_box)
+        # clipboard related settings
+        self.clipboard = Gdk.Display.get_default().get_clipboard()
+        self.clipboard.connect("changed", self.on_clipboad_changed)
 
-        # main boxes
-        self.main_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.box2 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        self.box3 = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        self.box4 = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.set_child(self.main_box)
+    def on_clipboad_changed(self, obj):
+        # when the content of clipboard has changed, then we need to reread the content
+        if self.props.visible:
+            self.clipboard.read_text_async(None, self.on_paste_text)
 
-        self.scrollable_treelist = Gtk.ScrolledWindow()
-        self.scrollable_treelist.set_vexpand(True)
-        self.scrollable_treelist.set_child(treeview)
+    def on_paste_text(self, _clipboard, result):
+        if ed_setup.clipboard_scan:
+            # the content of the clipboard
+            text = self.clipboard.read_text_finish(result)
+            if self.search.entry.get_text().lower() != text.lower():
+                self.search.entry.set_text(text)
 
-        self.button = Gtk.Button(label="Search")
-        self.dropdown = Gtk.DropDown.new_from_strings(["ENG", "CZE"])
-        self.button.connect("clicked", self.on_search)
-        self.entry = Gtk.Entry()
-        self.entry.props.hexpand = True
-        self.whole_word = Gtk.ToggleButton(label="Whole word")
-        self.whole_word.set_active(True)
-        self.fulltext = Gtk.ToggleButton(label="Fulltext")
-        self.fulltext.set_active(False)
-        self.fulltext.set_group(self.whole_word)
-        self.whole_word.props.hexpand = True
-        self.fulltext.props.hexpand = True
-        self.whole_word.connect("clicked", self.on_toggle)
-        self.fulltext.connect("clicked", self.on_toggle)
-        self.main_box.append(self.box2)
-        self.main_box.append(self.box3)
-        self.main_box.append(self.box4)
-        self.box2.append(self.entry)
-        self.box2.append(self.button)
-        self.box2.append(self.dropdown)
-        self.box3.append(self.whole_word)
-        self.box3.append(self.fulltext)
-        self.box4.append(self.scrollable_treelist)
+    def setup_content(self):
+        # Simple Listview with strings
+        self.listview_str = ResultListViewStrings(self)
+        lw_frame = Gtk.Frame()
+        lw_frame.set_valign(Gtk.Align.FILL)
+        lw_frame.set_vexpand(True)
+        # lw_frame.set_margin_start(20)
+        # lw_frame.set_margin_end(20)
+        # lw_frame.set_margin_top(10)
+        # lw_frame.set_margin_bottom(10)
+        sw = Gtk.ScrolledWindow()
+        # Create Gtk.Listview
+        lw = self.listview_str
+        sw.set_child(lw)
+        lw_frame.set_child(sw)
+        return lw_frame
 
-    def on_search(self, button):
-        lng = self.dropdown.get_selected_item().props.string
-        # print(db_search(lng.lower(), self.entry.props.text, False))
-        self.store.clear()
-        for result in db_search(
-            lng.lower(), self.entry.props.text, self.search_fulltext
-        ):
-            treeiter = self.store.append(
-                [
-                    result["eng"],
-                    "<b>test</b>\nhmm",
-                    "test",
-                    "test",
-                ]
-            )
+    def load_css(self, css_fn):
+        """create a provider for custom styling"""
+        css_full_path = (Path(__file__).parent / css_fn).resolve()
+        print(css_full_path, os.path.exists(css_full_path))
+        if css_fn and os.path.exists(css_fn):
+            css_provider = Gtk.CssProvider()
+            try:
+                css_provider.load_from_path(css_full_path)
+            except GLib.Error as e:
+                print(f"Error loading CSS : {e} ")
+                return None
+            print(f"loading custom styling : {css_fn}")
+            self.css_provider = css_provider
 
-    def on_toggle(self, button):
-        if button.props.label == "Fulltext":
-            self.search_type = "fulltext"
-            self.search_fulltext = True
-        elif button.props.label == "Whole word":
-            self.search_type = "whole_word"
-            self.search_fulltext = False
+    def write_windows_size_to_ini_file(self):
+        # actual window size
+        width = self.props.default_width
+        height = self.props.default_height
+        # write it to the disk with GLib.idle_add, because of another Thread
+        GLib.idle_add(ed_setup.write_settings, "win_width", width)
+        GLib.idle_add(ed_setup.write_settings, "win_height", height)
+
+    async def save_win_size_after_one_sec(self):
+        self.task = asyncio.create_task(asyncio.sleep(1))
+        await self.task
+        self.write_windows_size_to_ini_file()
+
+    async def save_window_size(self):
+        create_new_task = False
+        if self.task:
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                print(f"canceled: {self.task.cancelled()} or done: {self.task.done()}")
+            if self.task.cancelled() or self.task.done():
+                create_new_task = True
         else:
-            self.search_type = "whole_word"
-            self.search_fulltext = False
+            create_new_task = True
 
-    def on_tree_selection_changed(self, selection):
-        model, treeiter = selection.get_selected()
-        if treeiter is not None:
-            print("You selected", model[treeiter][0])
+        if create_new_task:
+            await self.save_win_size_after_one_sec()
+
+    def on_size_changed(self, widget, event):
+        # if is "Remember window size?" checked in Settings dialog and event came from
+        # "default-width" or "default-height", then we should save the windows size to the
+        # file, but it is not good idea to write it directly with every change of window
+        # size, so we will limit the number of writings with asyncio tasks, where we put
+        # small time delay
+        if ed_setup.win_size_remember:
+            asyncio.run_coroutine_threadsafe(self.save_window_size(), self._loop)
+            # we can save it directly, but better is to limit writing to the disk
+            # ed_setup.write_settings("win_width", self.props.default_width)
+            # ed_setup.write_settings("win_height", self.props.default_height)
+
+    def on_close_button(self, widget):
+        # this method is not used for now, we have button to minimize window
+        self.hide()
+        return True
 
 
-class EasyDict(Adw.Application):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.connect("activate", self.on_activate)
+class Application(Adw.Application):
+    """Main Aplication class"""
 
-    def on_activate(self, app):
-        self.win = MainWindow(application=app)
-        self.win.present()
+    def __init__(self, loop):
+        super().__init__(
+            application_id="one.jiri.easydict-gtk",
+            flags=Gio.ApplicationFlags.FLAGS_NONE,
+        )
+        self._loop = loop
+
+    def do_activate(self):
+        win = self.props.active_window
+        if not win:
+            win = MyWindow("EasyDict-GTK", loop=self._loop, app=self)
+        win.present()
+
+
+def run_event_loop(q):
+    """Run asyncio event loop in another Thread"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    q.put(loop)
+    try:
+        loop.run_forever()
+    finally:
+        loop.close()
 
 
 def main(args=sys.argv[1:]):
-    import hupper
-
+    """Run the main application"""
     if "--reload" in args:
+        import hupper
+
+        package = Path(__file__).parent.parent
+        sys.path.append(str(package))
         # start_reloader will only return in a monitored subprocess
         reloader = hupper.start_reloader("easydict_gtk.easydict.main")
         # monitor an extra file
         # reloader.watch_files(['foo.ini'])
-        app = EasyDict(application_id="one.jiri.easydict")
-        app.run()
+
+    q = Queue()
+    thread = Thread(target=run_event_loop, args=(q,))
+    thread.daemon = True
+    thread.start()
+    loop = q.get()  # loop for search tasks and for save window size
+    app = Application(loop)
+    sys.exit(app.run())
 
 
 if __name__ == "__main__":
-    print("zde")
     main()
-
-
-#
-#
-# # I inherit from pure classes with just methods
-# class EasyDict(Handlers, Settings):
-# 	def __init__(self):
-# 		"""
-# 		Build GUI
-# 		"""
-# 		#My variables and classes
-# 		self.cwd = cwd
-# 		self.cwd_images = cwd_images
-# 		self.create_html = CreateHtml()
-# 		self.db_search = db_search
-#
-# 		# Build GUI from Glade file
-# 		self.builder = Gtk.Builder()
-# 		self.builder.add_from_file(str(self.cwd / "ui" / "easydict.glade"))
-#
-# 		# get objects and set them
-# 		gui = self.builder.get_object
-# 		self.window = gui("window") # main window
-# 		self.header = gui("header") # HeaderBar
-# 		self.header.set_decoration_layout('menu:close') # set HeaderBar decoration to show only close button
-# 		self.header.props.show_close_button = True	# allow to show close button in HeaderBar
-# 		self.box_dicts = gui("box_dicts") # scrolled window for dicts
-# 		self.entry_search = gui("entry_search") # searched word object
-# 		self.entry_search.set_activates_default(True) # set Enter to act with default widget=button_search
-# 		self.button_fulltext = gui("button_fulltext") # for toggle button state
-# 		self.button_search = gui("button_search") # search button
-# 		self.popover_language = gui("popover_language") # popover for right button mouse click
-# 		self.button_search.grab_default() # set search button for default if user hits Enter
-# 		self.image_language = gui("image_language") # flag of current language
-# 		self.button_easydict = gui("button_easydict") # buton for main menu in HeaderBar
-# 		self.popover_main_menu = gui("popover_main_menu") # main menu popover
-# 		self.dialog_about = gui("dialog_about") # about dialog
-# 		self.dialog_help = gui("dialog_help") # help dialog
-# 		self.dialog_settings = gui("dialog_settings") # settings dialog
-# 		self.webview = WebKit2.WebView() # because of bug in Glade, it have to be declared here, not in Glade
-# 		self.box_dicts.add(self.webview) # add webkit webview to scrolled window
-# 		self.webview.load_html(self.create_html.default_html, "file://") # not necessary row, but maybe nice welcome image is good!
-#
-# 		# clipboard function
-# 		self.clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
-# 		self.clipboard.connect("owner-change", self.onClipboard)
-#
-# 		# settings objects
-# 		self.checkbutton_scan = gui("checkbutton_scan")
-# 		self.checkbutton_size = gui("checkbutton_size")
-# 		self.combobox_language = gui("combobox_language")
-#
-# 		# connect signals from builder
-# 		self.builder.connect_signals(self)
-#
-# 		# initiate user settings
-# 		self.initiate_settings()
-#
-# 		# settings of windows
-# 		self.window.set_icon_from_file(str(self.cwd_images / "ed_icon.png"))
-# 		self.window.set_keep_above(True)
-# 		self.dialog_about.set_keep_above(True)
-# 		self.dialog_help.set_keep_above(True)
-# 		self.dialog_settings.set_keep_above(True)
-#
-# 		# tray icon (I am using XAppStatusIcon, because it is last working solution for GTK)
-# 		if 'gi.repository.XApp' not in modules.keys() or environ.get("DESKTOP_SESSION") == "gnome": # if import of XApp was not succesful or we are on Gnome, where the tray is not exists
-# 			self.tray = None # because of onXButton handler
-# 			self.window.show_all() # without show_all() the window will be hidden
-# 		else:
-# 			self.tray = StatusIcon()
-# 			self.tray.set_icon_name(str(self.cwd_images / "ed_tray_icon.png"))
-# 			self.tray.set_tooltip_text("EasyDict - The open translator")
-# 			self.tray.connect("button-press-event", self.onTrayClicked)
-# 			self.menu = TrayMenu() # tray icon menu from class TrayMenu in file tray_menu.py
-# 			self.menu.item1.connect("activate", self.onSettingsClicked) # connect menu item Settings
-# 			self.menu.item2.connect("activate", self.onHelpClicked) # connect menu item Help
-# 			self.menu.item3.connect("activate", self.onAboutClicked) # connect menu item About
-# 			self.menu.item4.connect("activate", self.onExitClicked) # connect menu item Exit
-# 			self.tray.set_secondary_menu(self.menu)
-# 			self.window.props.visible = False
-#
-# def main():
-# 	gui = EasyDict()
-# 	Gtk.main()
