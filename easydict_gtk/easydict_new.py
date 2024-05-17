@@ -29,7 +29,7 @@ class MyWindow(Adw.ApplicationWindow):
         self.tray = TrayIcon(win=self)
         self.connect("notify::default-width", self.on_size_changed)
         self.connect("notify::default-height", self.on_size_changed)
-        self.connect("close-request", self.on_close_button)
+        # self.connect("close-request", self.on_close_button)
         self.load_css("ui/search_box.css")
         # set initial size of the window from settings
         self.set_default_size(ed_setup.win_width, ed_setup.win_height)
@@ -46,7 +46,7 @@ class MyWindow(Adw.ApplicationWindow):
         # Add Options button (Menu content is defined inside the MenuButton class)
         option_btn = MenuButton(self)
         header.pack_start(option_btn)
-        header.set_decoration_layout("icon:close")
+        header.set_decoration_layout("icon:minimize")
         self.search = SearchBar(loop, self)
         self.front_page = FrontPage()
         self.stack = Adw.ViewStack()
@@ -145,6 +145,7 @@ class MyWindow(Adw.ApplicationWindow):
             # ed_setup.write_settings("win_height", self.props.default_height)
 
     def on_close_button(self, widget):
+        # this method is not used for now, we have button to minimize window
         self.hide()
         return True
 
@@ -169,8 +170,12 @@ class Application(Adw.Application):
 def run_event_loop(q):
     """Run asyncio event loop in another Thread"""
     loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     q.put(loop)
-    loop.run_forever()
+    try:
+        loop.run_forever()
+    finally:
+        loop.close()
 
 
 def main(args=sys.argv[1:]):
@@ -191,7 +196,7 @@ def main(args=sys.argv[1:]):
     thread.start()
     loop = q.get()  # loop for search tasks and for save window size
     app = Application(loop)
-    app.run()
+    sys.exit(app.run())
 
 
 if __name__ == "__main__":

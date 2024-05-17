@@ -7,6 +7,8 @@ from gi.repository import Gtk, Gio, GLib, Gdk, GdkPixbuf, GObject, Adw
 # internal imports
 from settings import images
 from .dialogs import SettingsDialog
+import asyncio
+import sys
 
 
 class MenuButton(Gtk.MenuButton):
@@ -25,26 +27,40 @@ class MenuButton(Gtk.MenuButton):
         popover_menu = self.create_popover_menu()
         self.set_popover(popover_menu)
 
+    def close_app(self):
+        # closing the app we should do in three steps
+        # 1 - close the loop in another Thread (not needed, but it is correct)
+        async def loop_stop(loop):
+            loop.stop()
+
+        asyncio.run_coroutine_threadsafe(loop_stop(self.win._loop), self.win._loop)
+
+        # 2 - close the db (definitely needed, without it the app will not close itself )
+        asyncio.run(self.win.search.adb.close_db())
+
+        # 3  - and close the app (its windows) itself
+        self.win.close()
+        # other possibilities how to close/destroy the app
+        # self.win.destroy()
+        # self.win = None
+
     def create_actions_for_main_window(self):
         # Create a new "Action for Settings button"
         action = Gio.SimpleAction.new("settings", None)
         action.connect("activate", lambda *args: self.create_settings_dialog())
-        self.win.add_action(action)
+        self.win.app.add_action(action)
         # Create a new "Action for Help button"
         action = Gio.SimpleAction.new("help", None)
         action.connect("activate", lambda *args: self.show_help_dialog())
-        self.win.add_action(action)
+        self.win.app.add_action(action)
         # Create a new "Action for About button"
         action = Gio.SimpleAction.new("about", None)
         action.connect("activate", lambda *args: self.show_about_dialog())
-        self.win.add_action(action)
+        self.win.app.add_action(action)
         # Create a new "Action for Quit button"
         action = Gio.SimpleAction.new("quit", None)
         action.connect("activate", lambda *args: self.close_app())
-        self.win.add_action(action)
-
-    def close_app(self):
-        self.win.app.quit()
+        self.win.app.add_action(action)
 
     def create_settings_dialog(self):
         sd = SettingsDialog(self.win)
@@ -54,10 +70,10 @@ class MenuButton(Gtk.MenuButton):
         popover = Gtk.PopoverMenu()
         menu = Gio.Menu.new()
         # add menu items with connected actions
-        menu.append("Settings", "win.settings")
-        menu.append("Help", "win.help")
-        menu.append("About", "win.about")
-        menu.append("Quit", "win.quit")
+        menu.append("Settings", "app.settings")
+        menu.append("Help", "app.help")
+        menu.append("About", "app.about")
+        menu.append("Quit", "app.quit")
         popover.set_menu_model(menu)
         popover.set_has_arrow(True)
         return popover

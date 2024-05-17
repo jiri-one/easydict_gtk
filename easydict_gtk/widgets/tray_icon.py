@@ -41,10 +41,10 @@ class TrayIcon:
     def get_menu(self):
         menu = EasyTrayMenu(
             menu_items={
-                "Settings": lambda *args: self.win.activate_action("win.settings"),
-                "Help": lambda *args: self.win.activate_action("win.help"),
-                "About": lambda *args: self.win.activate_action("win.about"),
-                "Quit": lambda *args: self.win.activate_action("win.quit"),
+                "Settings": lambda *args: self.win.activate_action("app.settings"),
+                "Help": lambda *args: self.win.activate_action("app.help"),
+                "About": lambda *args: self.win.activate_action("app.about"),
+                "Quit": lambda *args: self.win.activate_action("app.quit"),
             },
             dbus_path=DBUS_PATH,
         )

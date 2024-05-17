@@ -163,3 +163,6 @@ class SQLiteBackend(DBBackend):
         else:
             async with aiosqlite.connect(self.db_file) as conn_file:
                 await self.conn.backup(conn_file)
+
+    async def close_db(self):
+        await self.conn.close()
